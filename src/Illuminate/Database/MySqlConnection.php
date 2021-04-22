@@ -6,7 +6,9 @@ use Illuminate\Database\Schema\MySqlBuilder;
 use Illuminate\Database\Query\Processors\MySqlProcessor;
 use Doctrine\DBAL\Driver\PDOMySql\Driver as DoctrineDriver;
 use Illuminate\Database\Query\Grammars\MySqlGrammar as QueryGrammar;
+use Illuminate\Database\Query\Grammars\TiDBGrammar;
 use Illuminate\Database\Schema\Grammars\MySqlGrammar as SchemaGrammar;
+use PDO;
 
 class MySqlConnection extends Connection
 {
@@ -31,6 +33,9 @@ class MySqlConnection extends Connection
      */
     protected function getDefaultQueryGrammar()
     {
+        if ($this->isTiDB()) {
+            return $this->withTablePrefix(new TiDBGrammar);
+        }
         return $this->withTablePrefix(new QueryGrammar);
     }
 
@@ -62,5 +67,15 @@ class MySqlConnection extends Connection
     protected function getDoctrineDriver()
     {
         return new DoctrineDriver;
+    }
+
+    /**
+     * Determine if the connected database is a TiDB cluster.
+     *
+     * @return bool
+     */
+    public function isTiDB()
+    {
+        return strpos($this->getPdo()->getAttribute(PDO::ATTR_SERVER_VERSION), 'TiDB') !== false;
     }
 }

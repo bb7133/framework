@@ -17,13 +17,27 @@ class DatabaseEloquentIntegrationTest extends PHPUnit_Framework_TestCase
         $db = new DB;
 
         $db->addConnection([
-            'driver'    => 'sqlite',
-            'database'  => ':memory:',
+        'driver'    => 'mysql',
+        'host'      => "127.0.0.1",
+        'port'      => 4000,
+        'database'  => "test",
+        'username'  => "root",
+        'password'  => "",
+        'charset'   => 'utf8',
+        'collation' => 'utf8_unicode_ci',
+        'prefix'    => '',
         ]);
 
         $db->addConnection([
-            'driver'    => 'sqlite',
-            'database'  => ':memory:',
+        'driver'    => 'mysql',
+        'host'      => "127.0.0.1",
+        'port'      => 4000,
+        'database'  => "test2",
+        'username'  => "root",
+        'password'  => "",
+        'charset'   => 'utf8',
+        'collation' => 'utf8_unicode_ci',
+        'prefix'    => '',
         ], 'second_connection');
 
         $db->bootEloquent();
@@ -38,7 +52,8 @@ class DatabaseEloquentIntegrationTest extends PHPUnit_Framework_TestCase
             $this->schema($connection)->create('users', function ($table) {
                 $table->increments('id');
                 $table->string('email');
-                $table->timestamps();
+                $table->timestamp('created_at')->useCurrent();
+                $table->timestamp('updated_at')->useCurrent();
             });
 
             $this->schema($connection)->create('friends', function ($table) {
@@ -51,14 +66,23 @@ class DatabaseEloquentIntegrationTest extends PHPUnit_Framework_TestCase
                 $table->integer('user_id');
                 $table->integer('parent_id')->nullable();
                 $table->string('name');
-                $table->timestamps();
+                $table->timestamp('created_at')->useCurrent();
+                $table->timestamp('updated_at')->useCurrent();
             });
 
             $this->schema($connection)->create('photos', function ($table) {
                 $table->increments('id');
                 $table->morphs('imageable');
                 $table->string('name');
-                $table->timestamps();
+                $table->timestamp('created_at')->useCurrent();
+                $table->timestamp('updated_at')->useCurrent();
+            });
+
+            $this->schema($connection)->create('items', function ($table) {
+                $table->increments('id');
+                $table->string('item_name');
+                $table->timestamp('created_at')->useCurrent();
+                $table->timestamp('updated_at')->useCurrent();
             });
         }
     }
@@ -75,6 +99,7 @@ class DatabaseEloquentIntegrationTest extends PHPUnit_Framework_TestCase
             $this->schema($connection)->drop('friends');
             $this->schema($connection)->drop('posts');
             $this->schema($connection)->drop('photos');
+            $this->schema($connection)->drop('items');
         }
 
         Relation::morphMap([], false);
@@ -666,7 +691,7 @@ class DatabaseEloquentIntegrationTest extends PHPUnit_Framework_TestCase
         $this->assertEquals(2, EloquentTestPost::count());
     }
 
-    public function testNestedTransactions()
+    public function testNestedTransactionsOnly()
     {
         $user = EloquentTestUser::create(['email' => 'taylor@laravel.com']);
         $this->connection()->transaction(function () use ($user) {
@@ -681,6 +706,58 @@ class DatabaseEloquentIntegrationTest extends PHPUnit_Framework_TestCase
             }
             $user = EloquentTestUser::first();
             $this->assertEquals('taylor@laravel.com', $user->email);
+        });
+    }
+
+    public function testNestedTransactionsFailedForTiDB()
+    {
+        $user = EloquentTestUser::create(['email' => 'initial@gmail.com']);
+        $item = EloquentTestItem::create(['item_name' => 'initial_item']);
+        $this->connection()->transaction(function () use ($user, $item) {
+            $user->email = 'updated@gmail.com';
+            $item->item_name = "update_item_1";
+            // Sync to database
+            $user->save();
+            $item->save();
+            try {
+                $this->connection()->beginTransaction();
+                echo "begin nested TXN\n";
+                $item->item_name = 'invalid_item';
+                $item->save();
+                $user->id = 'invalid';
+                $user->email = 'invalid@gmail.com';
+                $user->save();  // Raise exception due to invalid id
+                $user->email = 'updated@gmail.com';
+            } catch (Exception $e) {
+                $this->connection()->rollBack();
+                echo "rollback nested TXN\n";
+            }
+            // $item->item_name = "update_item_2";
+            // $item->save();
+            $user = EloquentTestUser::first();
+            $item = EloquentTestItem::first();
+            $this->assertEquals('updated@gmail.com', $user->email);
+            $this->assertEquals('update_item_1', $item->item_name);
+        });
+    }
+
+    public function testNestedTransactionsFalsePositiveForTiDB()
+    {
+        $user = EloquentTestUser::create(['email' => 'initial@gmail.com']);
+        $this->connection()->transaction(function () use ($user) {
+            $user->email = 'updated@gmail.com';
+            $user->save();
+            try {
+                $this->connection()->transaction(function () use ($user) {
+                    $user->id = 'invalid';
+                    $user->email = 'invalid@gmail.com';
+                    $user->save();
+                });
+            } catch (Exception $e) {
+                // ignore the exception
+            }
+            $user = EloquentTestUser::first();
+            $this->assertEquals('updated@gmail.com', $user->email);
         });
     }
 
@@ -849,4 +926,10 @@ class EloquentTestPhoto extends Eloquent
     {
         return $this->morphTo();
     }
+}
+
+class EloquentTestItem extends Eloquent
+{
+    protected $table = 'items';
+    protected $guarded = [];
 }
