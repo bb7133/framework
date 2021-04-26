@@ -5,12 +5,16 @@ namespace Illuminate\Database\Query\Grammars;
 class TiDBGrammar extends MySqlGrammar
 {
     /**
-     * Determine if the grammar supports savepoints.
+     * Compile the SQL statement to define a savepoint.
      *
-     * @return bool
+     * @param  string  $name
+     * @return string
      */
-    public function supportsSavepoints()
+    public function compileSavepoint($name)
     {
-        return false;
+        // We hack the SAVEPOINT to do nothing, so that:
+        // - Both nested transaction runs succesfully if there's no error.
+        // - Both nested transaction rollbacks if there's error
+        return '';
     }
 }

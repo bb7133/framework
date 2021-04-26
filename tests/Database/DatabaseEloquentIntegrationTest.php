@@ -711,6 +711,23 @@ class DatabaseEloquentIntegrationTest extends PHPUnit_Framework_TestCase
 
     public function testNestedTransactionsFailedForTiDB()
     {
+        // config(['connections' => ['mysql' => [
+        //     'driver' => 'mysql',
+        //     //'url' => env('DATABASE_URL'),
+        //     'host' => '127.0.0.1',
+        //     'port' => '3306',
+        //     'database' => 'test',
+        //     'username' => 'root',
+        //     'password' => '',
+        //     'unix_socket' => '',
+        //     'charset' => 'utf8mb4',
+        //     'collation' => 'utf8mb4_unicode_ci',
+        //     'prefix' => '',
+        //     'prefix_indexes' => true,
+        //     'strict' => true,
+        //     'engine' => null,
+        //     'options' => [],
+        // ]]]);
         $user = EloquentTestUser::create(['email' => 'initial@gmail.com']);
         $item = EloquentTestItem::create(['item_name' => 'initial_item']);
         $this->connection()->transaction(function () use ($user, $item) {
@@ -739,6 +756,60 @@ class DatabaseEloquentIntegrationTest extends PHPUnit_Framework_TestCase
             $this->assertEquals('updated@gmail.com', $user->email);
             $this->assertEquals('update_item_1', $item->item_name);
         });
+    }
+
+    public function testNestedTransactionsCommitOrRollbackAllForTiDB()
+    {
+        $user = EloquentTestUser::create(['email' => 'initial@gmail.com']);
+        $item = EloquentTestItem::create(['item_name' => 'initial_item']);
+
+        // Test outer transaction rollbacks due to the exception raised by inner transaction.
+        $this->connection()->transaction(function () use ($user, $item) {
+            $user->email = 'updated@gmail.com';
+            $item->item_name = "update_item_1";
+            // Sync to database
+            $user->save();
+            $item->save();
+            try {
+                $this->connection()->beginTransaction();
+                $item->item_name = 'invalid_item';
+                $item->save();
+                $user->id = 'invalid';
+                $user->email = 'invalid@gmail.com';
+                $user->save();  // Raise exception due to invalid id
+                $user->email = 'updated@gmail.com';
+            } catch (Exception $e) {
+                $this->connection()->rollBack();
+            }
+        });
+        $user = EloquentTestUser::first();
+        $item = EloquentTestItem::first();
+        $this->assertEquals('initial@gmail.com', $user->email);
+        $this->assertEquals('initial_item', $item->item_name);
+
+        // Test nested transactions success when there's no exception.
+        $this->connection()->transaction(function () use ($user, $item) {
+            $user->email = 'updated@gmail.com';
+            $item->item_name = "update_item_1";
+            // Sync to database
+            $user->save();
+            $item->save();
+            try {
+                $this->connection()->beginTransaction();
+                $item->item_name = 'update_item_2';
+                $item->save();
+                $user->id = 5; // valid id
+                $user->email = 'updated_2@gmail.com';
+                $user->save(); // expect success
+            } catch (Exception $e) {
+                $this->connection()->rollBack();
+            }
+        });
+        $user = EloquentTestUser::first();
+        $item = EloquentTestItem::first();
+        $this->assertEquals('updated_2@gmail.com', $user->email);
+        $this->assertEquals(5, $user->id);
+        $this->assertEquals('update_item_2', $item->item_name);
     }
 
     public function testNestedTransactionsFalsePositiveForTiDB()
